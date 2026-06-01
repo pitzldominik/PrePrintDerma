@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Preprint-Suche Dermatologie</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f8f7f4;--surface:#fff;--surface2:#f2f0ec;--border:#e0ddd6;--border2:#ccc9c0;
+  --text:#1a1916;--text2:#6b6860;--text3:#9b9890;
+  --accent:#0f6e56;--accent-h:#085041;--accent-l:#e1f5ee;--accent-t:#085041;
+  --blue:#185fa5;--blue-l:#e6f1fb;--blue-t:#0c447c;
+  --excel:#1d6f42;--excel-h:#155232;
+  --warn-bg:#faeeda;--warn-border:#ef9f27;--warn-text:#633806;
+  --r:8px;--rl:12px;
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#1a1916;--surface:#252420;--surface2:#2f2d28;--border:#3a3832;--border2:#4a4840;
+  --text:#f0ede8;--text2:#9b9890;--text3:#6b6860;
+  --accent:#1d9e75;--accent-h:#0f6e56;--accent-l:#04342c;--accent-t:#9fe1cb;
+  --blue:#378add;--blue-l:#042c53;--blue-t:#85b7eb;
+  --excel:#2aad63;--excel-h:#1d9e75;
+  --warn-bg:#412402;--warn-border:#ba7517;--warn-text:#fac775;
+}}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:14px;line-height:1.5}
+.wrap{max-width:1200px;margin:0 auto;padding:2rem 1.5rem 4rem}
+
+.page-header{margin-bottom:2rem;border-bottom:1px solid var(--border);padding-bottom:1.5rem}
+.page-header h1{font-size:22px;font-weight:600;margin-bottom:4px}
+.page-header p{font-size:13px;color:var(--text2)}
+.pills{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.pill{display:inline-flex;align-items:center;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:500}
+.pill-bio{background:var(--blue-l);color:var(--blue-t)}
+.pill-med{background:var(--accent-l);color:var(--accent-t)}
+.pill-date{background:var(--surface2);color:var(--text2);border:1px solid var(--border)}
+
+.info-banner{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);padding:1rem 1.25rem;margin-bottom:1.5rem;font-size:12px;color:var(--text2);display:flex;gap:10px;align-items:flex-start}
+.info-banner svg{flex-shrink:0;margin-top:1px}
+.warn-banner{background:var(--warn-bg);border:1px solid var(--warn-border);color:var(--warn-text);border-radius:var(--rl);padding:.9rem 1.25rem;margin-bottom:1.5rem;font-size:13px;display:none}
+
+.filters-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);padding:1.25rem 1.5rem;margin-bottom:1.25rem}
+.fg-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+@media(max-width:640px){.fg-grid{grid-template-columns:1fr}}
+.fg{display:flex;flex-direction:column;gap:5px}
+.fg label{font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.06em}
+.fg select,.fg input[type=text]{padding:8px 10px;font-size:13px;border:1px solid var(--border2);border-radius:var(--r);background:var(--surface2);color:var(--text);transition:border-color .15s,box-shadow .15s;width:100%}
+.fg select:focus,.fg input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 15%,transparent)}
+
+.btn-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:1.25rem}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 18px;font-size:13px;font-weight:500;border-radius:var(--r);border:1px solid var(--border2);background:var(--surface);color:var(--text);cursor:pointer;transition:background .15s}
+.btn:hover{background:var(--surface2)}
+.btn:active{transform:scale(.98)}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn-primary:hover{background:var(--accent-h);border-color:var(--accent-h)}
+.btn-excel{background:var(--excel);border-color:var(--excel);color:#fff}
+.btn-excel:hover{background:var(--excel-h);border-color:var(--excel-h)}
+.results-count{font-size:12px;color:var(--text3);margin-left:auto}
+
+.table-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);overflow:hidden}
+.table-scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{padding:10px 12px;text-align:left;font-size:11px;font-weight:600;color:var(--text2);background:var(--surface2);border-bottom:1px solid var(--border);white-space:nowrap;text-transform:uppercase;letter-spacing:.04em}
+td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--surface2)}
+
+.badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:600;white-space:nowrap}
+.badge-bio{background:var(--blue-l);color:var(--blue-t)}
+.badge-med{background:var(--accent-l);color:var(--accent-t)}
+.title-link{color:var(--blue);text-decoration:none;font-weight:500;line-height:1.4;display:block;min-width:220px;max-width:340px}
+.title-link:hover{text-decoration:underline}
+.authors-text{color:var(--text2);font-size:11px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-width:130px;max-width:180px}
+.email-link{color:var(--blue);text-decoration:none;font-size:11px;word-break:break-all}
+.email-link:hover{text-decoration:underline}
+.no-data{color:var(--text3)}
+.ext-link{color:var(--blue);display:inline-flex;align-items:center}
+
+.spinner-wrap{padding:4rem 2rem;text-align:center;color:var(--text3)}
+.spinner{width:28px;height:28px;border:3px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 12px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.empty-state{padding:4rem 2rem;text-align:center;color:var(--text3)}
+.empty-state svg{width:36px;height:36px;margin:0 auto 12px;display:block;opacity:.35}
+.empty-state p{font-size:14px}
+.empty-state small{font-size:12px;display:block;margin-top:4px}
+
+.page-footer{margin-top:3rem;padding-top:1.5rem;border-top:1px solid var(--border);font-size:11px;color:var(--text3)}
+.page-footer a{color:var(--blue)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="page-header">
+    <h1>Preprint-Suche — Dermatologie</h1>
+    <p>Automatisierte Abfrage aktueller Preprints aus bioRxiv und medRxiv</p>
+    <div class="pills">
+      <span class="pill pill-bio">bioRxiv — Dermato* / Skin / Venerol*</span>
+      <span class="pill pill-med">medRxiv — Subject: Dermatology</span>
+      <span class="pill pill-date" id="fetchedPill" style="display:none"></span>
+    </div>
+  </div>
+
+  <div class="info-banner">
+    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <span>Die Daten werden täglich um 05:00 UTC automatisch per GitHub Action aktualisiert und als <code>data.json</code> gespeichert. Filterung und Suche laufen vollständig im Browser — kein Server, kein Proxy, kein API-Key.</span>
+  </div>
+
+  <div class="warn-banner" id="warnBanner"></div>
+
+  <div class="filters-card">
+    <div class="fg-grid">
+      <div class="fg">
+        <label>Zeitraum</label>
+        <select id="period">
+          <option value="1">Letzter Monat</option>
+          <option value="3">Letzte 3 Monate</option>
+          <option value="6" selected>Letzte 6 Monate</option>
+          <option value="12">Letzte 12 Monate</option>
+          <option value="18">Letzte 18 Monate</option>
+        </select>
+      </div>
+      <div class="fg">
+        <label>Textsuche — Titel &amp; Abstract (optional)</label>
+        <input type="text" id="searchtext" placeholder="z.B. melanoma, psoriasis …" oninput="applyFilters()">
+      </div>
+      <div class="fg">
+        <label>Quelle</label>
+        <select id="source" onchange="applyFilters()">
+          <option value="both">bioRxiv + medRxiv</option>
+          <option value="biorxiv">Nur bioRxiv</option>
+          <option value="medrxiv">Nur medRxiv</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn btn-excel" id="xlsBtn" style="display:none" onclick="downloadExcel()">
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      Excel herunterladen
+    </button>
+    <span class="results-count" id="resultsCount"></span>
+  </div>
+
+  <div class="table-card">
+    <div class="table-scroll">
+      <div class="spinner-wrap" id="loadingState">
+        <div class="spinner"></div>
+        <p style="font-size:13px;color:var(--text2)">Daten werden geladen…</p>
+      </div>
+      <div class="empty-state" id="emptyState" style="display:none">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+        <p>Keine Ergebnisse</p>
+        <small>Zeitraum erweitern oder Textsuche anpassen</small>
+      </div>
+      <table id="resultsTable" style="display:none">
+        <thead>
+          <tr>
+            <th style="width:90px">Datum</th>
+            <th style="width:74px">Quelle</th>
+            <th>Titel</th>
+            <th style="width:160px">Autoren</th>
+            <th style="width:140px">Korr. Autor</th>
+            <th style="width:175px">E-Mail</th>
+            <th style="width:44px">Link</th>
+          </tr>
+        </thead>
+        <tbody id="resultsBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="page-footer">
+    Daten von <a href="https://www.biorxiv.org" target="_blank">bioRxiv</a> und
+    <a href="https://www.medrxiv.org" target="_blank">medRxiv</a> via öffentlicher API &nbsp;·&nbsp;
+    Aktualisierung täglich automatisch per GitHub Action &nbsp;·&nbsp;
+    Kein Tracking, keine externe Abhängigkeit zur Laufzeit
+  </div>
+</div>
+
+<script>
+let allRecords = [];   // full dataset from data.json
+let filtered   = [];   // currently displayed subset
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function cutoffDate(months) {
+  const d = new Date();
+  d.setMonth(d.getMonth() - parseInt(months));
+  return d.toISOString().split('T')[0];
+}
+
+/* ── Load data.json once on startup ─────────────────────────── */
+async function loadData() {
+  try {
+    const r = await fetch('data.json?_=' + Date.now());
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const json = await r.json();
+    allRecords = json.records || [];
+
+    // Show fetch date pill
+    if (json.fetched_at) {
+      const pill = document.getElementById('fetchedPill');
+      pill.textContent = 'Stand: ' + json.fetched_at;
+      pill.style.display = 'inline-flex';
+    }
+
+    // Warn if data is older than 3 days
+    if (json.fetched_at) {
+      const age = (Date.now() - new Date(json.fetched_at)) / 86400000;
+      if (age > 3) {
+        const wb = document.getElementById('warnBanner');
+        wb.textContent = `⚠ Daten sind ${Math.floor(age)} Tage alt. Bitte GitHub Action manuell ausführen oder auf den nächsten automatischen Lauf warten.`;
+        wb.style.display = 'block';
+      }
+    }
+
+    document.getElementById('loadingState').style.display = 'none';
+    applyFilters();
+  } catch(e) {
+    document.getElementById('loadingState').style.display = 'none';
+    const es = document.getElementById('emptyState');
+    es.style.display = 'block';
+    es.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      <p>data.json nicht gefunden</p>
+      <small>GitHub Action noch nicht ausgeführt? → Actions-Tab → "Fetch Preprints" → "Run workflow"</small>`;
+  }
+}
+
+/* ── Filter & render ────────────────────────────────────────── */
+function applyFilters() {
+  const months = document.getElementById('period').value;
+  const query  = document.getElementById('searchtext').value.trim().toLowerCase();
+  const src    = document.getElementById('source').value;
+  const cutoff = cutoffDate(months);
+
+  filtered = allRecords.filter(p => {
+    if (p.date < cutoff) return false;
+    if (src === 'biorxiv' && p.source !== 'bioRxiv') return false;
+    if (src === 'medrxiv' && p.source !== 'medRxiv') return false;
+    if (query) {
+      const text = (p.title + ' ' + p.abstract).toLowerCase();
+      // support multiple words with space = AND logic
+      return query.split(/\s+/).every(w => text.includes(w));
+    }
+    return true;
+  });
+
+  renderTable(filtered);
+}
+
+function renderTable(data) {
+  const tbody = document.getElementById('resultsBody');
+  const table = document.getElementById('resultsTable');
+  const empty = document.getElementById('emptyState');
+  tbody.innerHTML = '';
+
+  if (!data.length) {
+    table.style.display = 'none';
+    empty.style.display = 'block';
+    empty.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/><line x1="8" y1="11" x2="14" y2="11"/></svg><p>Keine Ergebnisse</p><small>Zeitraum erweitern oder Textsuche anpassen</small>`;
+    document.getElementById('xlsBtn').style.display = 'none';
+    document.getElementById('resultsCount').textContent = '';
+    return;
+  }
+
+  data.forEach(p => {
+    const url = p.url || (p.doi ? `https://doi.org/${p.doi}` : '#');
+    const bc  = p.source === 'bioRxiv' ? 'badge-bio' : 'badge-med';
+    const tr  = document.createElement('tr');
+    tr.innerHTML = `
+      <td style="white-space:nowrap;font-size:12px;color:var(--text2)">${esc(p.date)}</td>
+      <td><span class="badge ${bc}">${esc(p.source)}</span></td>
+      <td><a class="title-link" href="${esc(url)}" target="_blank" rel="noopener">${esc(p.title)}</a></td>
+      <td><div class="authors-text">${esc(p.authors)}</div></td>
+      <td style="font-size:12px">${esc(p.corresponding_author)||'<span class="no-data">—</span>'}</td>
+      <td>${p.email?`<a class="email-link" href="mailto:${esc(p.email)}">${esc(p.email)}</a>`:'<span class="no-data">—</span>'}</td>
+      <td><a class="ext-link" href="${esc(url)}" target="_blank" rel="noopener" title="Artikel öffnen">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+      </a></td>`;
+    tbody.appendChild(tr);
+  });
+
+  empty.style.display = 'none';
+  table.style.display  = 'table';
+  document.getElementById('xlsBtn').style.display = 'inline-flex';
+
+  const bio = data.filter(d => d.source === 'bioRxiv').length;
+  const med = data.filter(d => d.source === 'medRxiv').length;
+  document.getElementById('resultsCount').textContent =
+    `${data.length} Preprint${data.length!==1?'s':''} — bioRxiv: ${bio}, medRxiv: ${med}`;
+}
+
+/* ── Excel export ───────────────────────────────────────────── */
+function downloadExcel() {
+  if (!filtered.length) return;
+  const rows = filtered.map(p => ({
+    'Datum':                     p.date,
+    'Quelle':                    p.source,
+    'Titel':                     p.title,
+    'Autoren':                   p.authors,
+    'Korrespondierender Autor':  p.corresponding_author,
+    'E-Mail (Korr. Autor)':      p.email,
+    'DOI':                       p.doi,
+    'Link':                      p.url || (p.doi ? `https://doi.org/${p.doi}` : '')
+  }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [{wch:12},{wch:10},{wch:80},{wch:60},{wch:32},{wch:38},{wch:36},{wch:46}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Preprints Dermatologie');
+  XLSX.writeFile(wb, `Preprints_Dermatologie_${new Date().toISOString().split('T')[0]}.xlsx`);
+}
+
+/* ── Wire up period selector ────────────────────────────────── */
+document.getElementById('period').addEventListener('change', applyFilters);
+
+/* ── Boot ───────────────────────────────────────────────────── */
+loadData();
+</script>
+</body>
+</html>
