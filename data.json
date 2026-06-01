@@ -1,5 +1,18 @@
 {
-  "fetched_at": "",
-  "total": 0,
-  "records": []
+  "fetched_at": "2026-06-01",
+  "total": 1,
+  "records": [
+    {
+      "date": "2024-12-08",
+      "source": "bioRxiv",
+      "title": "Exosomes for facial repair, regeneration and rejuvenation: comparison between different commercial products",
+      "authors": "Salvaggio, A.; Privitera, A.; Ferruggia, G.; Zimbone, M.; Brundo, M. V.",
+      "corresponding_author": "Brundo, M. V.",
+      "email": "",
+      "doi": "10.1101/2024.12.07.627351",
+      "url": "https://doi.org/10.1101/2024.12.07.627351",
+      "category": "cell biology",
+      "abstract": "Exosomes have been studied as a potential therapeutic option for improving skin texture. The mode of action of exosomes for skin texture likely involves several mechanisms, including stimulation of collagen production, promotion of skin cell proliferation; reduction of oxidative stress; regulation of inflammatory and antioxidant responses; extracellular matrix remodeling, which is important for maintaining skin structure and function. Aim of this study is to compare the in vitro effects of some commercial products that use new technologies containing plant derived nanovesicles from Rosa damascena callus, Centella asiatica callus, Euphorbia supina stem and exosomes from bovine colostrum passively loaded with growth factors and cytokines purified from bovine colostrum, for facial repair, regeneration and rejuvenation. Of all the products tested, only product containing exosomes purified from colostrum gave very encouraging results in terms of effects on proliferation, cell viability and wound repair. The other products tested gave results comparable to the untreated samples."
+    }
+  ]
 }
