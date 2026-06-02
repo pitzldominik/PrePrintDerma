@@ -1,158 +1,149 @@
 #!/usr/bin/env python3
 """
-Fetch dermatology preprints via Europe PMC REST API.
-- No API key required
-- Real keyword search (not blind pagination)
-- Up to 1000 results per page
-- Covers bioRxiv + medRxiv
-
-bioRxiv query : SRC:PPR AND PUBLISHER:biorxiv AND (dermato* OR skin OR venerol*)
-medRxiv query : SRC:PPR AND PUBLISHER:medrxiv AND dermatology (title/abstract)
-                + category filter applied locally since Europe PMC has the subject area
-
-API docs: https://europepmc.org/RestfulWebService
+Fetch dermatology preprints — v5
+- Europe PMC for search/discovery (correct counts, real keyword search)
+- bioRxiv/medRxiv JATS XML API for corresponding author email
+- medRxiv: ONLY official "Dermatology" category (matches website exactly)
+- bioRxiv: title/abstract keyword search (dermato*, skin, venerol*)
 """
 
-import json
-import re
-import sys
-import time
+import json, re, sys, time
 from datetime import date, timedelta
 from pathlib import Path
 
 import requests
 
-BASE_URL   = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
-SESSION    = requests.Session()
+SESSION = requests.Session()
 SESSION.headers.update({
-    "User-Agent": "preprint-derma/4.0 (github-pages; contact: preprint-derma)",
+    "User-Agent": "preprint-derma/5.0",
     "Accept":     "application/json",
 })
 
 MONTHS_BACK = 18
-PAGE_SIZE   = 1000   # Europe PMC allows up to 1000
-PAGE_DELAY  = 0.5
+PAGE_DELAY  = 0.4
 
-# ── Date helper ──────────────────────────────────────────────────
+# ── Dates ────────────────────────────────────────────────────────
 
-def start_date(months=MONTHS_BACK):
-    d = date.today() - timedelta(days=months * 30)
-    return d.strftime("%Y-%m-%d")
+def date_range(months=MONTHS_BACK):
+    today  = date.today()
+    cutoff = today - timedelta(days=months * 30)
+    return cutoff.isoformat(), today.isoformat()
 
-# ── Europe PMC search ────────────────────────────────────────────
+# ── Europe PMC ───────────────────────────────────────────────────
 
-def epmc_search(query, cursor_mark="*", retries=3):
-    """One page of Europe PMC results. Returns (results_list, next_cursor, hit_count)."""
-    params = {
-        "query":       query,
-        "resultType":  "core",
-        "pageSize":    PAGE_SIZE,
-        "format":      "json",
-        "cursorMark":  cursor_mark,
-        "sort":        "P_PDATE_D desc",
-    }
-    for attempt in range(retries):
-        try:
-            r = SESSION.get(BASE_URL, params=params, timeout=30)
-            r.raise_for_status()
-            d = r.json()
-            results   = d.get("resultList", {}).get("result", [])
-            next_cur  = d.get("nextCursorMark", "")
-            hit_count = d.get("hitCount", 0)
-            return results, next_cur, hit_count
-        except Exception as e:
-            print(f"    attempt {attempt+1} failed: {e}")
-            if attempt < retries - 1:
-                time.sleep(2 ** attempt)
-    return [], "", 0
+EPMC = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 
 def epmc_all(query, label):
-    """Paginate through all Europe PMC results for a query."""
-    all_results = []
-    cursor      = "*"
-    page        = 0
-
+    """Fetch all pages from Europe PMC for a query."""
+    results, cursor, page = [], "*", 0
     while True:
         page += 1
-        results, next_cursor, hit_count = epmc_search(query, cursor)
-
-        if page == 1:
-            print(f"  Total hits reported by API: {hit_count}")
-
-        if not results:
+        try:
+            r = SESSION.get(EPMC, params={
+                "query":      query,
+                "resultType": "core",
+                "pageSize":   1000,
+                "format":     "json",
+                "cursorMark": cursor,
+                "sort":       "P_PDATE_D desc",
+            }, timeout=30)
+            r.raise_for_status()
+            d        = r.json()
+            batch    = d.get("resultList", {}).get("result", [])
+            next_cur = d.get("nextCursorMark", "")
+            hits     = d.get("hitCount", 0)
+            if page == 1:
+                print(f"  API hitCount: {hits}")
+            if not batch:
+                break
+            results.extend(batch)
+            print(f"  Page {page}: +{len(batch)} → {len(results)} total")
+            if not next_cur or next_cur == cursor or len(results) >= hits:
+                break
+            cursor = next_cur
+            time.sleep(PAGE_DELAY)
+        except Exception as e:
+            print(f"  ERROR page {page}: {e}")
             break
+    print(f"  ✓ {label}: {len(results)} records from Europe PMC")
+    return results
 
-        all_results.extend(results)
-        print(f"  Page {page}: +{len(results)} records → {len(all_results)} fetched")
+# ── Email from JATS XML ──────────────────────────────────────────
 
-        # Stop if we've got everything or cursor didn't advance
-        if not next_cursor or next_cursor == cursor or len(all_results) >= hit_count:
-            break
+EMAIL_CACHE = {}
 
-        cursor = next_cursor
-        time.sleep(PAGE_DELAY)
-
-    print(f"  ✓ {label}: {len(all_results)} records fetched")
-    return all_results
-
-# ── Author / email parsing ───────────────────────────────────────
-
-def extract_email(text):
-    if not text:
-        return ""
-    m = re.search(r"[\w.+%-]+@[\w.-]+\.[a-z]{2,}", text, re.I)
-    return m.group(0) if m else ""
-
-def parse_epmc_authors(record):
+def fetch_email_from_xml(doi, server="biorxiv"):
     """
-    Europe PMC provides authorList.author with firstName, lastName, affiliation.
-    The corresponding author is often flagged or is the last author.
+    Fetch corresponding author email from bioRxiv/medRxiv JATS XML.
+    API: https://api.biorxiv.org/xml/{server}/{doi}
+    Email is in <corresp> or <email> tags in the XML.
     """
+    if doi in EMAIL_CACHE:
+        return EMAIL_CACHE[doi]
+
+    # Try both XML endpoints
+    urls = [
+        f"https://www.biorxiv.org/content/{doi}.source.xml",
+        f"https://www.medrxiv.org/content/{doi}.source.xml",
+    ]
+    for url in urls:
+        try:
+            r = SESSION.get(url, timeout=15)
+            if r.status_code != 200:
+                continue
+            text = r.text
+            # Look for <email> tags (most reliable)
+            emails = re.findall(r"<email[^>]*>(.*?)</email>", text, re.DOTALL)
+            if emails:
+                email = emails[0].strip()
+                EMAIL_CACHE[doi] = email
+                return email
+            # Look for email pattern in <corresp> blocks
+            corresps = re.findall(r"<corresp[^>]*>(.*?)</corresp>", text, re.DOTALL | re.IGNORECASE)
+            for c in corresps:
+                m = re.search(r"[\w.+%-]+@[\w.-]+\.[a-z]{2,}", c)
+                if m:
+                    EMAIL_CACHE[doi] = m.group(0)
+                    return m.group(0)
+            # Broad search in full XML
+            m = re.search(r"[\w.+%-]+@[\w.-]+\.[a-z]{2,}", text)
+            if m:
+                email = m.group(0)
+                # Skip generic emails
+                if not any(x in email.lower() for x in ["biorxiv", "medrxiv", "rxivist", "doi"]):
+                    EMAIL_CACHE[doi] = email
+                    return email
+        except Exception:
+            pass
+
+    EMAIL_CACHE[doi] = ""
+    return ""
+
+# ── Author parsing from Europe PMC ──────────────────────────────
+
+def parse_authors(record):
     authors_raw = (record.get("authorList") or {}).get("author") or []
     if not authors_raw:
-        # Fallback: authorString
-        raw = record.get("authorString", "")
-        parts = [p.strip() for p in raw.rstrip(".").split(",") if p.strip()]
-        corr  = parts[-1] if parts else ""
-        return raw, corr, ""
+        raw   = record.get("authorString", "").rstrip(".")
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+        return raw, parts[-1] if parts else "", ""
 
     names = []
-    corr_name  = ""
-    corr_email = ""
-
     for a in authors_raw:
         first = a.get("firstName", "")
         last  = a.get("lastName",  "")
         full  = f"{last} {first}".strip() if last else first
         names.append(full)
 
-        # Check for corresponding author flag
-        if a.get("authorAffiliationsList"):
-            affs = a["authorAffiliationsList"].get("authorAffiliation", [])
-            for aff in affs:
-                email = extract_email(aff.get("affiliation", ""))
-                if email and not corr_email:
-                    corr_email = email
-                    corr_name  = full
+    corr = names[-1] if names else ""
+    return "; ".join(names), corr, ""   # email fetched separately
 
-    authors_str = "; ".join(names)
-    if not corr_name and names:
-        corr_name = names[-1]   # default: last author
-
-    # Also try fullTextUrlList for email hints
-    if not corr_email:
-        corr_email = extract_email(record.get("abstractText", ""))
-
-    return authors_str, corr_name, corr_email
-
-# ── Record normaliser ────────────────────────────────────────────
+# ── Normalise Europe PMC record ──────────────────────────────────
 
 def normalise(record, source_label):
     doi = record.get("doi", "")
-    authors_str, corr, email = parse_epmc_authors(record)
-
-    # Publication date: firstPublicationDate or pubYear
-    pub_date = record.get("firstPublicationDate", "") or record.get("pubYear", "")
+    authors_str, corr, _ = parse_authors(record)
+    pub_date = record.get("firstPublicationDate", "") or str(record.get("pubYear", ""))
 
     return {
         "date":                 pub_date,
@@ -160,38 +151,75 @@ def normalise(record, source_label):
         "title":                record.get("title", "").rstrip("."),
         "authors":              authors_str,
         "corresponding_author": corr,
-        "email":                email,
+        "email":                "",    # filled in second pass
         "doi":                  doi,
-        "url":                  f"https://doi.org/{doi}" if doi else
-                                record.get("fullTextUrlList", {}).get("fullTextUrl", [{}])[0].get("url", ""),
+        "url":                  f"https://doi.org/{doi}" if doi else "",
         "abstract":             record.get("abstractText", ""),
     }
+
+# ── Enrich with emails ───────────────────────────────────────────
+
+def enrich_emails(records):
+    """Second pass: fetch email from JATS XML for each record."""
+    total = len(records)
+    print(f"\n── Fetching emails from JATS XML ({total} records) ──")
+    found = 0
+    for i, rec in enumerate(records):
+        doi = rec.get("doi", "")
+        if not doi:
+            continue
+        server = "medrxiv" if rec["source"] == "medRxiv" else "biorxiv"
+        email  = fetch_email_from_xml(doi, server)
+        if email:
+            rec["email"] = email
+            found += 1
+        if (i + 1) % 20 == 0 or (i + 1) == total:
+            print(f"  {i+1}/{total} processed, {found} emails found so far")
+        time.sleep(0.2)  # polite rate limiting
+    print(f"  ✓ Emails found: {found}/{total}")
 
 # ── Main ─────────────────────────────────────────────────────────
 
 def main():
-    months  = int(sys.argv[1]) if len(sys.argv) > 1 else MONTHS_BACK
-    cutoff  = start_date(months)
-    today   = date.today().isoformat()
+    months       = int(sys.argv[1]) if len(sys.argv) > 1 else MONTHS_BACK
+    cutoff, today = date_range(months)
 
-    print(f"Fetching preprints from {cutoff} to {today} ({months} months)")
-    print(f"Using Europe PMC REST API — no API key needed\n")
+    print(f"Date range: {cutoff} → {today}  ({months} months)\n")
 
     all_results = []
     seen_dois   = set()
 
-    # ── bioRxiv: keyword search ──────────────────────────────────
-    # dermato* wildcard not supported directly; use OR expansion
+    # ── medRxiv: official Dermatology category only ──────────────
+    # Matches what medrxiv.org/collection/dermatology shows
+    med_query = (
+        f"SRC:PPR AND PUBLISHER:medrxiv AND "
+        f"SUBJECT:\"Dermatology\" AND "
+        f"FIRST_PDATE:[{cutoff} TO {today}]"
+    )
+    print(f"── medRxiv (Dermatology category) ──")
+    print(f"  Query: {med_query}")
+    med_records = epmc_all(med_query, "medRxiv")
+
+    for r in med_records:
+        doi = r.get("doi", "") or r.get("title", "")
+        if doi in seen_dois:
+            continue
+        seen_dois.add(doi)
+        all_results.append(normalise(r, "medRxiv"))
+
+    time.sleep(PAGE_DELAY)
+
+    # ── bioRxiv: keyword search in title + abstract ──────────────
     bio_query = (
         f"SRC:PPR AND PUBLISHER:biorxiv AND "
         f"(TITLE:dermatol* OR TITLE:dermatitis OR TITLE:dermatos* OR "
-        f"TITLE:skin OR TITLE:venerol* OR "
-        f"ABSTRACT:dermatol* OR ABSTRACT:dermatitis OR ABSTRACT:dermatos* OR "
-        f"ABSTRACT:skin OR ABSTRACT:venerol*) AND "
+        f" TITLE:skin OR TITLE:venerol* OR "
+        f" ABSTRACT:dermatol* OR ABSTRACT:dermatitis OR ABSTRACT:dermatos* OR "
+        f" ABSTRACT:skin OR ABSTRACT:venerol*) AND "
         f"FIRST_PDATE:[{cutoff} TO {today}]"
     )
-    print(f"── bioRxiv query ──")
-    print(f"  {bio_query}\n")
+    print(f"\n── bioRxiv (keyword search) ──")
+    print(f"  Query: {bio_query}")
     bio_records = epmc_all(bio_query, "bioRxiv")
 
     for r in bio_records:
@@ -201,29 +229,8 @@ def main():
         seen_dois.add(doi)
         all_results.append(normalise(r, "bioRxiv"))
 
-    time.sleep(PAGE_DELAY)
-
-    # ── medRxiv: dermatology subject area ────────────────────────
-    # Europe PMC indexes the medRxiv category in the subject field
-    med_query = (
-        f"SRC:PPR AND PUBLISHER:medrxiv AND "
-        f"(TITLE:dermatol* OR TITLE:dermatitis OR TITLE:dermatos* OR "
-        f"TITLE:skin OR TITLE:venerol* OR "
-        f"ABSTRACT:dermatol* OR ABSTRACT:dermatitis OR ABSTRACT:dermatos* OR "
-        f"ABSTRACT:skin OR ABSTRACT:venerol* OR "
-        f"SUBJECT:dermatology) AND "
-        f"FIRST_PDATE:[{cutoff} TO {today}]"
-    )
-    print(f"\n── medRxiv query ──")
-    print(f"  {med_query}\n")
-    med_records = epmc_all(med_query, "medRxiv")
-
-    for r in med_records:
-        doi = r.get("doi", "") or r.get("title", "")
-        if doi in seen_dois:
-            continue
-        seen_dois.add(doi)
-        all_results.append(normalise(r, "medRxiv"))
+    # ── Enrich with emails from JATS XML ─────────────────────────
+    enrich_emails(all_results)
 
     # ── Sort & save ──────────────────────────────────────────────
     all_results.sort(key=lambda x: x["date"], reverse=True)
@@ -239,15 +246,15 @@ def main():
         json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    bio = sum(1 for r in all_results if r["source"] == "bioRxiv")
-    med = sum(1 for r in all_results if r["source"] == "medRxiv")
-    print(f"\n✓ Saved {len(all_results)} records to data.json")
-    print(f"  bioRxiv: {bio}  |  medRxiv: {med}")
+    bio   = sum(1 for r in all_results if r["source"] == "bioRxiv")
+    med   = sum(1 for r in all_results if r["source"] == "medRxiv")
+    email = sum(1 for r in all_results if r["email"])
+    print(f"\n✓ Saved {len(all_results)} records")
+    print(f"  bioRxiv: {bio}  |  medRxiv: {med}  |  with email: {email}")
 
     if len(all_results) == 0:
-        print("\n⚠ 0 records — check API or query syntax")
+        print("⚠ 0 records — check API or query")
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()
