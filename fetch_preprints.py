@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Fetch dermatology preprints from bioRxiv and medRxiv APIs.
-Queries in monthly chunks to avoid API throttling (API caps at 30 results
-for large date ranges but returns up to 100 for narrow ranges).
+Uses WEEKLY chunks to stay within the API's 100-results-per-page limit.
+Large date ranges (months) cause the API to throttle to ~30 results;
+weekly chunks reliably return up to 100 per page.
 """
 
 import json
@@ -16,23 +17,23 @@ import requests
 
 SESSION = requests.Session()
 SESSION.headers.update({
-    "User-Agent": "preprint-derma-bot/2.0 (github-pages research tool)",
+    "User-Agent": "preprint-derma-bot/3.0",
     "Accept": "application/json"
 })
 
 BIO_TERMS   = ["dermato", "skin", "venerol"]
 MONTHS_BACK = 18
-PAGE_DELAY  = 0.4   # seconds between requests
+PAGE_DELAY  = 0.35
 
 # ── Date helpers ─────────────────────────────────────────────────
 
-def monthly_chunks(months=MONTHS_BACK):
-    """Return list of (start, end) pairs, one per month, newest first."""
+def weekly_chunks(months=MONTHS_BACK):
+    """Return list of (start, end) 7-day windows covering the period, newest first."""
     chunks = []
     end = date.today()
-    for _ in range(months):
-        start = (end.replace(day=1) - timedelta(days=1)).replace(day=1)
-        # For the current (partial) month use today as end
+    start_limit = end - timedelta(days=months * 30)
+    while end > start_limit:
+        start = max(end - timedelta(days=6), start_limit)
         chunks.append((start.isoformat(), end.isoformat()))
         end = start - timedelta(days=1)
     return chunks  # newest first
@@ -40,38 +41,34 @@ def monthly_chunks(months=MONTHS_BACK):
 # ── API fetch ────────────────────────────────────────────────────
 
 def fetch_page(server, start, end, cursor, retries=3):
+    # Use api.medrxiv.org as it's the canonical host for both servers
     url = f"https://api.biorxiv.org/details/{server}/{start}/{end}/{cursor}"
     for attempt in range(retries):
         try:
             r = SESSION.get(url, timeout=30)
             r.raise_for_status()
             data = r.json()
-            msgs = data.get("messages", [])
-            if msgs and attempt == 0:
-                m = msgs[0]
-                print(f"      status={m.get('status')} count={m.get('count')} total={m.get('total')}")
-            return data.get("collection") or []
+            return data.get("collection") or [], data.get("messages", [{}])[0]
         except Exception as e:
             print(f"      attempt {attempt+1} failed: {e}")
             if attempt < retries - 1:
                 time.sleep(2 ** attempt)
-    return []
+    return [], {}
 
 def fetch_chunk(server, start, end, filter_fn, seen):
-    """Fetch one date chunk, paginating until exhausted. Returns new records."""
+    """Paginate through one weekly window. Returns new matching records."""
     results = []
     cursor  = 0
     page    = 0
 
     while True:
         page += 1
-        print(f"    [{start}→{end}] page {page} cursor={cursor} ...", end=" ", flush=True)
-        collection = fetch_page(server, start, end, cursor)
+        collection, msg = fetch_page(server, start, end, cursor)
 
         if not collection:
-            print("empty → done")
             break
 
+        count = msg.get("count", len(collection))
         matched = 0
         for p in collection:
             if not filter_fn(p):
@@ -95,10 +92,8 @@ def fetch_chunk(server, start, end, filter_fn, seen):
                 "abstract":             p.get("abstract", ""),
             })
 
-        print(f"{len(collection)} records, {matched} new matches")
-
         if len(collection) < 100:
-            break   # last page of this chunk
+            break
         cursor += 100
         time.sleep(PAGE_DELAY)
 
@@ -129,29 +124,30 @@ def bio_filter(p):
 def med_filter(p):
     return "dermatology" in (p.get("category") or "").lower()
 
-# ── Main fetch per server ────────────────────────────────────────
+# ── Main fetch ───────────────────────────────────────────────────
 
 def fetch_server(server, months, filter_fn, label):
-    chunks  = monthly_chunks(months)
+    chunks  = weekly_chunks(months)
     seen    = set()
     results = []
+    total_weeks = len(chunks)
 
-    print(f"\n── {label} ({months} months, {len(chunks)} chunks) ──")
+    print(f"\n── {label} ({months} months = {total_weeks} weekly chunks) ──")
 
     for i, (start, end) in enumerate(chunks):
         new = fetch_chunk(server, start, end, filter_fn, seen)
         results.extend(new)
-        print(f"  Chunk {i+1}/{len(chunks)}: +{len(new)} → {len(results)} total")
+        if new or (i % 4 == 0):  # print every 4 weeks or when matches found
+            print(f"  Week {i+1:3d}/{total_weeks}  {start}→{end}  +{len(new):3d} matches  total={len(results)}")
         time.sleep(PAGE_DELAY)
 
-    print(f"  ✓ {label}: {len(results)} preprints")
+    print(f"  ✓ {label}: {len(results)} preprints found")
     return results
-
-# ── Entry point ──────────────────────────────────────────────────
 
 def main():
     months = int(sys.argv[1]) if len(sys.argv) > 1 else MONTHS_BACK
-    print(f"Fetching last {months} months in monthly chunks …")
+    print(f"Fetching last {months} months in weekly chunks …")
+    print(f"Approx. {months * 4} API windows per server\n")
 
     all_results = []
     all_results.extend(fetch_server("biorxiv", months, bio_filter, "bioRxiv"))
